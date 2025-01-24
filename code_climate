@@ -1,0 +1,211 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import joblib
+import warnings
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_curve, auc, precision_recall_curve
+from sklearn.preprocessing import LabelBinarizer
+import geopandas as gpd
+import folium
+
+warnings.filterwarnings('ignore')
+
+# Load dataset
+file_path = r"C:\\Users\\admin\\OneDrive\\Apps\\climate.py\\climate_nasa.csv"
+data = pd.read_csv(file_path)
+
+# Inspect dataset
+print("Dataset Preview:\n", data.head())
+print("\nMissing Values:\n", data.isna().sum())
+
+# Ensure numeric columns have correct data types
+numeric_columns = data.select_dtypes(include=[np.number]).columns
+for col in numeric_columns:
+    data[col] = pd.to_numeric(data[col], errors='coerce')
+
+# Visualize distribution of target variable
+plt.figure(figsize=(8, 6))
+sns.countplot(x=data['sentiment_category'], palette='viridis')
+plt.title('Distribution of Sentiment Categories')
+plt.show()
+
+# Inserted histogram with KDE for sentiment_category
+sns.set_style('darkgrid')
+plt.figure(figsize=(13, 7))
+sns.histplot(data['sentiment_category'], kde=True, bins=15)
+plt.title('Target Variable Distribution', y=1.02, fontsize=15)
+plt.show()
+
+# Handle Skewness Calculation Only for Numeric Columns
+numeric_columns = data.select_dtypes(include=[np.number]).columns
+print("Skewness for Numeric Columns:\n", data[numeric_columns].skew())
+
+# If you want to calculate skewness on 'sentiment_category' after encoding
+label_encoder = LabelEncoder()
+data['sentiment_category_encoded'] = label_encoder.fit_transform(data['sentiment_category'])
+print("Skewness for Encoded Sentiment Category:", data['sentiment_category_encoded'].skew())
+
+# Drop irrelevant columns if they exist
+if 'profileName' in data.columns and 'text' in data.columns:
+    data = data.drop(['profileName', 'text'], axis=1)
+
+# Separate features (X) and target variable (y)
+X = data.drop(columns=['sentiment_category'])
+y = data['sentiment_category']
+
+# Handle missing values
+X.fillna(X.median(), inplace=True)  # Replace NaN with column medians
+y.dropna(inplace=True)  # Ensure no missing target values
+
+# Encode categorical columns in X using One-Hot Encoding
+categorical_cols = X.select_dtypes(include=['object']).columns
+X = pd.get_dummies(X, columns=categorical_cols)
+
+# Encode target variable
+label_encoder = LabelEncoder()
+y = label_encoder.fit_transform(y)
+
+# Split dataset into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train RandomForest Classifier
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# Save the model for future use
+joblib.dump(model, 'random_forest_sentiment.pkl')
+
+# Make predictions
+y_pred = model.predict(X_test)
+
+# Evaluate model
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Model Accuracy: {accuracy * 100:.2f}%")
+
+# Confusion Matrix
+plt.figure(figsize=(8, 6))
+sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, cmap='Blues', fmt='d')
+plt.title('Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+# Classification Report
+print("Classification Report:\n", classification_report(y_test, y_pred, target_names=label_encoder.classes_))
+
+# Feature Importance
+feature_importances = model.feature_importances_
+plt.figure(figsize=(10, 6))
+sns.barplot(x=feature_importances, y=X.columns, palette='viridis')
+plt.title('Feature Importance')
+plt.xlabel('Importance')
+plt.ylabel('Features')
+plt.show()
+
+# Correlation Heatmap
+plt.figure(figsize=(10, 6))
+sns.heatmap(X.corr(), annot=True, cmap='coolwarm', linewidths=0.5)
+plt.title('Correlation Heatmap')
+plt.show()
+
+# ROC Curve for Multiclass
+lb = LabelBinarizer()
+y_test_bin = lb.fit_transform(y_test)
+y_pred_proba = model.predict_proba(X_test)
+
+plt.figure(figsize=(8, 6))
+for i in range(y_test_bin.shape[1]):
+    fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_pred_proba[:, i])
+    plt.plot(fpr, tpr, label=f'Class {i} (AUC={auc(fpr, tpr):.2f})')
+
+plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Multiclass ROC Curve')
+plt.legend()
+plt.show()
+
+# Precision-Recall Curve
+plt.figure(figsize=(8, 6))
+for i in range(y_test_bin.shape[1]):
+    precision, recall, _ = precision_recall_curve(y_test_bin[:, i], y_pred_proba[:, i])
+    plt.plot(recall, precision, label=f'Class {i} (AUC={auc(recall, precision):.2f})')
+
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Multiclass Precision-Recall Curve')
+plt.legend()
+plt.show()
+
+# Missing Value Visualization for the train set
+ax = X_train.isna().sum().sort_values(ascending=False)[:15][::-1].plot(kind='barh', figsize=(9, 10))
+plt.title('Percentage of Missing Values Per Column in Train Set', fontdict={'size': 15})
+
+# Add annotations to display the percentage of missing values
+for p in ax.patches:
+    percentage = '{:,.0f}%'.format((p.get_width() / X_train.shape[0]) * 100)  # Calculate percentage of missing values
+    width, height = p.get_width(), p.get_height()
+    x = p.get_x() + width + 0.02  # Adjust x position to avoid overlap
+    y = p.get_y() + height / 2  # Center y position
+    ax.annotate(percentage, (x, y))  # Add percentage annotation to the plot
+
+plt.show()
+
+# Boxplot showing Likes Count outliers
+sns.set_style('darkgrid')
+plt.figure(figsize=(13, 7))
+sns.boxplot(x=data['likesCount'])  # Replace 'likesCount' with the appropriate column name
+plt.title('Boxplot showing Likes Count outliers', y=1.02, fontsize=15)
+plt.show()
+
+# Check if 'latitude' and 'longitude' exist in the dataset
+if 'latitude' in data.columns and 'longitude' in data.columns:
+    # Combine train and test data for easier visualization of geospatial data
+    train_coords = X_train.copy()
+    test_coords = X_test.copy()
+
+    # Add 'latitude' and 'longitude' to train and test datasets
+    train_coords['latitude'] = data.loc[X_train.index, 'latitude']
+    train_coords['longitude'] = data.loc[X_train.index, 'longitude']
+    test_coords['latitude'] = data.loc[X_test.index, 'latitude']
+    test_coords['longitude'] = data.loc[X_test.index, 'longitude']
+
+    # Add 'set_type' labels
+    train_coords['set_type'], test_coords['set_type'] = 'train', 'test'
+
+    # Combine into one dataset
+    all_data = pd.concat([train_coords[['latitude', 'longitude', 'set_type']], test_coords[['latitude', 'longitude', 'set_type']]], ignore_index=True)
+
+    # Create point geometries for the combined dataset
+    geometry = gpd.points_from_xy(all_data['longitude'], all_data['latitude'])
+
+    # Create GeoDataFrame
+    geo_df = gpd.GeoDataFrame(all_data[['latitude', 'longitude', 'set_type']], geometry=geometry)
+
+    # Preview the GeoDataFrame
+    print(geo_df.head())
+
+    # Folium Map Visualization
+    map_center = [geo_df.geometry.y.mean(), geo_df.geometry.x.mean()]
+    folium_map = folium.Map(location=map_center, zoom_start=10)
+
+    # Add markers to map
+    for idx, row in geo_df.iterrows():
+        folium.CircleMarker(
+            location=[row.geometry.y, row.geometry.x],
+            radius=2,
+            color='blue',
+            fill=True,
+            fill_color='blue'
+        ).add_to(folium_map)
+
+    # Save and Display map
+    folium_map.save('geo_map.html')
+    print("Map saved as 'geo_map.html'. Open this file in a browser to view the map.")
+else:
+    print("No 'latitude' or 'longitude' columns found in the dataset.")
+
